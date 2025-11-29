@@ -26,6 +26,10 @@ jobs:
         with:
           terraform_version: 1.9.0
 
+      - name: Terraform Init
+        working-directory: infra/envs/dev
+        run: terraform init
+
       - name: Get Terraform outputs
         working-directory: infra/envs/dev
         run: terraform output -json > tf_outputs.json
