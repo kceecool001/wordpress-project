@@ -44,3 +44,14 @@ jobs:
         if: github.ref == 'refs/heads/main'
         working-directory: infra/envs/dev
         run: terraform apply -auto-approve tfplan
+      
+      - name: Save Terraform outputs
+        run: terraform output -json > tf_outputs.json
+        working-directory: infra/envs/dev
+        
+      - name: Upload outputs
+        uses: actions/upload-artifact@v3
+        with:
+            name: tf-outputs
+            path: infra/envs/dev/tf_outputs.json
+  

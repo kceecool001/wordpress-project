@@ -30,6 +30,18 @@ jobs:
         working-directory: infra/envs/dev
         run: terraform init
 
+      - name: Download outputs
+        uses: actions/download-artifact@v3
+        with:
+          name: tf-outputs
+          path: .
+
+      - name: Parse outputs
+        run: |
+          BUCKET=$(jq -r .bucket_name.value tf_outputs.json)
+          echo "bucket_name=$BUCKET" >> $GITHUB_ENV
+  
+
       - name: Get Terraform outputs
         working-directory: infra/envs/dev
         run: terraform output -json > tf_outputs.json
