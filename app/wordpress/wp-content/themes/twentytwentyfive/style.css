@@ -1,0 +1,14 @@
+/*
+Theme Name: Twenty Twenty-Five (Starter)
+Theme URI: https://example.com/twentytwentyfive
+Author: Your Name
+Description: Minimal starter theme for WordPress scaffold
+Version: 1.0
+License: GPLv2 or later
+Text Domain: twentytwentyfive
+*/
+body {
+  font-family: Arial, sans-serif;
+  margin: 2rem;
+  background: #f9f9f9;
+}
