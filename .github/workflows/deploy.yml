@@ -13,43 +13,43 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: eu-central-1
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.9.0
 
-      - name: Terraform Init (connect to remote backend)
+      - name: Terraform Init
         working-directory: infra/envs/dev
         run: terraform init -input=false
 
       - name: Get Terraform outputs
+        id: tfout
         working-directory: infra/envs/dev
-        run: terraform output -json > tf_outputs.json
-
-      - name: Parse Terraform outputs
         run: |
-          BUCKET=$(jq -r .bucket_name.value tf_outputs.json)
-          echo "bucket_name=$BUCKET" >> $GITHUB_ENV
-          HOST=$(jq -r .ec2_instance_public_ip.value tf_outputs.json)
-          echo "ec2_host=$HOST" >> $GITHUB_ENV
-          DB=$(jq -r .db_endpoint.value tf_outputs.json)
-          echo "db_endpoint=$DB" >> $GITHUB_ENV
-          ALB=$(jq -r .alb_dns_name.value tf_outputs.json)
-          echo "alb_dns_name=$ALB" >> $GITHUB_ENV
+          echo "bucket_name=$(terraform output -raw bucket_name)" >> $GITHUB_ENV
+          echo "ec2_host=$(terraform output -raw ec2_instance_public_ip)" >> $GITHUB_ENV
+          echo "db_endpoint=$(terraform output -raw db_endpoint)" >> $GITHUB_ENV
+          echo "alb_dns_name=$(terraform output -raw alb_dns_name)" >> $GITHUB_ENV
 
-      - name: Zip WordPress artifact
-        run: zip -r wordpress.zip app/
+      - name: Zip WordPress
+        working-directory: app
+        run: zip -r ../wordpress.zip .
 
       - name: Upload artifact to S3
-        run: aws s3 cp wordpress.zip s3://$bucket_name/wordpress.zip --region $AWS_DEFAULT_REGION
+        run: aws s3 cp wordpress.zip s3://${{ env.bucket_name }}/wordpress.zip
 
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v0.1.7
@@ -58,9 +58,11 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            aws s3 cp s3://$bucket_name/wordpress.zip /tmp/wordpress.zip --region $AWS_DEFAULT_REGION
-            unzip -o /tmp/wordpress.zip -d /var/www/html
-            systemctl restart httpd
+            sudo yum install -y awscli
+            aws s3 cp s3://${bucket_name}/wordpress.zip /tmp/wordpress.zip
+            sudo unzip -o /tmp/wordpress.zip -d /var/www/html
+            sudo systemctl restart httpd
 
       - name: Post-deploy info
-        run: echo "WordPress should now be accessible at: http://${alb_dns_name}"
+        run: |
+          echo "WordPress should now be accessible at: http://${{ env.alb_dns_name }}"
