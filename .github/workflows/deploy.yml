@@ -38,21 +38,14 @@ jobs:
 
       - name: Parse outputs
         run: |
-          BUCKET=$(jq -r .bucket_name.value tf_outputs.json)
-          echo "bucket_name=$BUCKET" >> $GITHUB_ENV
-  
-
-      - name: Get Terraform outputs
-        working-directory: infra/envs/dev
-        run: terraform output -json > tf_outputs.json
-
-      - name: Parse Terraform outputs
-        id: tf
-        run: |
-          echo "bucket_name=$(jq -r .bucket_name.value tf_outputs.json)" >> $GITHUB_ENV
-          echo "ec2_host=$(jq -r .ec2_instance_public_ip.value tf_outputs.json)" >> $GITHUB_ENV
-          echo "db_endpoint=$(jq -r .db_endpoint.value tf_outputs.json)" >> $GITHUB_ENV
-          echo "alb_dns_name=$(jq -r .alb_dns_name.value tf_outputs.json)" >> $GITHUB_ENV
+            BUCKET=$(jq -r .bucket_name.value tf_outputs.json)
+            echo "bucket_name=$BUCKET" >> $GITHUB_ENV
+            HOST=$(jq -r .ec2_instance_public_ip.value tf_outputs.json)
+            echo "ec2_host=$HOST" >> $GITHUB_ENV
+            DB=$(jq -r .db_endpoint.value tf_outputs.json)
+            echo "db_endpoint=$DB" >> $GITHUB_ENV
+            ALB=$(jq -r .alb_dns_name.value tf_outputs.json)
+            echo "alb_dns_name=$ALB" >> $GITHUB_ENV
 
       - name: Zip WordPress artifact
         run: zip -r wordpress.zip app/

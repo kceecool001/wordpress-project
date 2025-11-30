@@ -46,8 +46,9 @@ jobs:
         run: terraform apply -auto-approve tfplan
       
       - name: Save Terraform outputs
-        run: terraform output -json > tf_outputs.json
         working-directory: infra/envs/dev
+        run: terraform output -json > tf_outputs.json
+        
 
       - name: Upload outputs
         uses: actions/upload-artifact@v4
