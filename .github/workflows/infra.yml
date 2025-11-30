@@ -55,4 +55,5 @@ jobs:
         with:
             name: tf-outputs
             path: infra/envs/dev/tf_outputs.json
+            retention-days: 30
   ##
