@@ -1,4 +1,4 @@
-name: Terraform Infra Deployment
+name: WordPress Infra + App Deployment
 
 on:
   workflow_dispatch:
@@ -45,15 +45,46 @@ jobs:
         working-directory: infra/envs/dev
         run: terraform apply -auto-approve tfplan
       
-      - name: Save Terraform outputs
+      - name: Capture Terraform outputs
+        id: tf
         working-directory: infra/envs/dev
-        run: terraform output -json > tf_outputs.json
-        
+        run: |
+          echo "bucket_name=$(terraform output -raw bucket_name)" >> $GITHUB_ENV
+          echo "ec2_host=$(terraform output -raw ec2_instance_public_ip)" >> $GITHUB_ENV
+          echo "db_endpoint=$(terraform output -raw db_endpoint)" >> $GITHUB_ENV
+          echo "alb_dns_name=$(terraform output -raw alb_dns_name)" >> $GITHUB_ENV
+  
+  app-deploy:
+    needs: terraform
+    runs-on: ubuntu-latest
 
-      - name: Upload outputs
-        uses: actions/upload-artifact@v4
+    env:
+      AWS_DEFAULT_REGION: eu-central-1
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Zip WordPress app
+        working-directory: app
+        run: zip -r ../wordpress.zip .
+
+      - name: Upload artifact to S3
+        run: aws s3 cp wordpress.zip s3://$bucket_name/wordpress.zip
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v0.1.7
         with:
-            name: tf-outputs
-            path: infra/envs/dev/tf_outputs.json
-            retention-days: 30
-  ###
+          host: ${{ env.ec2_host }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            sudo yum install -y awscli unzip
+            aws s3 cp s3://$bucket_name/wordpress.zip /tmp/wordpress.zip
+            sudo unzip -o /tmp/wordpress.zip -d /var/www/html
+            sudo systemctl restart httpd
+
+      - name: Post-deploy info
+        run: 'echo "WordPress should now be accessible at: http://${alb_dns_name}"'
