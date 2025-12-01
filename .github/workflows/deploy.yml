@@ -31,14 +31,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-central-1
 
-      - name: Download Terraform outputs
+        # -------------------------------
+      # 1. Check if artifact exists
+      # -------------------------------
+      - name: Check for Terraform outputs artifact
+        id: has_artifact
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
-            name: tf-outputs
-            path: ./tf-out
-      - name: Parse Terraform outputs
-        id: tfout
+          name: tf-outputs
+          path: ./tf-out
+
+      
+      # -------------------------------
+      # 2. Use artifact if found
+      # -------------------------------
+      - name: Parse Terraform outputs from artifact
+        if: ${{ steps.has_artifact.outcome == 'success' }}
         run: |
+          echo "Using Terraform outputs artifact"
           bucket_name=$(jq -r '.bucket_name.value' tf-out/tf_outputs.json)
           ec2_host=$(jq -r '.ec2_instance_public_ip.value' tf-out/tf_outputs.json)
           db_endpoint=$(jq -r '.db_endpoint.value' tf-out/tf_outputs.json)
@@ -47,7 +58,21 @@ jobs:
           echo "bucket_name=$bucket_name" >> $GITHUB_ENV
           echo "ec2_host=$ec2_host" >> $GITHUB_ENV
           echo "db_endpoint=$db_endpoint" >> $GITHUB_ENV
-          echo "alb_dns_name=$alb_dns_name" >> $GITHUB_ENV    
+          echo "alb_dns_name=$alb_dns_name" >> $GITHUB_ENV
+
+      # -------------------------------
+      # 3. Fallback when artifact missing
+      # -------------------------------
+      - name: Fallback to terraform output
+        if: ${{ steps.has_artifact.outcome != 'success' }}
+        run: |
+          echo "No tf-outputs artifact found — running terraform locally"
+          cd infra/envs/dev
+          terraform init -input=false
+          echo "bucket_name=$(terraform output -raw bucket_name)" >> $GITHUB_ENV
+          echo "ec2_host=$(terraform output -raw ec2_instance_public_ip)" >> $GITHUB_ENV
+          echo "db_endpoint=$(terraform output -raw db_endpoint)" >> $GITHUB_ENV
+          echo "alb_dns_name=$(terraform output -raw alb_dns_name)" >> $GITHUB_ENV  
 
       - name: Zip WordPress
         working-directory: app
