@@ -41,7 +41,32 @@ resource "aws_instance" "main" {
   associate_public_ip_address = true
   key_name                    = var.key_name
   iam_instance_profile   = var.iam_instance_profile
-
+  user_data = <<-EOF
+              #!/bin/bash
+              # Update system
+              yum update -y
+              
+              # Install Apache, PHP, and required tools
+              yum install -y httpd php php-mysqlnd awscli unzip
+              
+              # Create web directory
+              mkdir -p /var/www/html
+              
+              # Set permissions
+              chown -R apache:apache /var/www/html
+              chmod -R 755 /var/www/html
+              
+              # Enable and start Apache
+              systemctl enable httpd
+              systemctl start httpd
+              
+              # Configure PHP
+              sed -i 's/upload_max_filesize = 2M/upload_max_filesize = 64M/' /etc/php.ini
+              sed -i 's/post_max_size = 8M/post_max_size = 64M/' /etc/php.ini
+              
+              # Restart Apache to apply changes
+              systemctl restart httpd
+              EOF
   tags = {
     Name = "${var.project}-ec2"
   }
