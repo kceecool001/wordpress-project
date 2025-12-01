@@ -49,10 +49,16 @@ jobs:
         id: tf
         working-directory: infra/envs/dev
         run: |
-          echo "bucket_name=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
-          echo "ec2_host=$(terraform output -raw ec2_public_ip)" >> $GITHUB_ENV
-          echo "db_endpoint=$(terraform output -raw db_endpoint)" >> $GITHUB_ENV
-          echo "alb_dns_name=$(terraform output -raw alb_dns_name)" >> $GITHUB_ENV
+          terraform output -json > tf_outputs.json
+          BUCKET=$(jq -r .s3_bucket_name.value tf_outputs.json)
+          HOST=$(jq -r .ec2_public_ip.value tf_outputs.json)
+          DB=$(jq -r .db_endpoint.value tf_outputs.json)
+          ALB=$(jq -r .alb_dns_name.value tf_outputs.json)
+
+          echo "bucket_name=$BUCKET" >> $GITHUB_ENV
+          echo "ec2_host=$HOST" >> $GITHUB_ENV
+          echo "db_endpoint=$DB" >> $GITHUB_ENV
+          echo "alb_dns_name=$ALB" >> $GITHUB_ENV
   
   app-deploy:
     needs: terraform
