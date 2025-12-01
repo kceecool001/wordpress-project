@@ -49,8 +49,8 @@ jobs:
         id: tf
         working-directory: infra/envs/dev
         run: |
-          echo "bucket_name=$(terraform output -raw bucket_name)" >> $GITHUB_ENV
-          echo "ec2_host=$(terraform output -raw ec2_instance_public_ip)" >> $GITHUB_ENV
+          echo "bucket_name=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
+          echo "ec2_host=$(terraform output -raw ec2_public_ip)" >> $GITHUB_ENV
           echo "db_endpoint=$(terraform output -raw db_endpoint)" >> $GITHUB_ENV
           echo "alb_dns_name=$(terraform output -raw alb_dns_name)" >> $GITHUB_ENV
   
