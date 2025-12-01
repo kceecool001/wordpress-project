@@ -92,19 +92,21 @@ jobs:
         run: zip -r ../wordpress.zip .
 
       - name: Upload artifact to S3
-        run: aws s3 cp wordpress.zip s3://$bucket_name/wordpress.zip
+        run: aws s3 cp wordpress.zip s3://${{ needs.terraform.outputs.bucket_name }}/wordpress.zip
 
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v0.1.7
+        env:
+          BUCKET_NAME: ${{ needs.terraform.outputs.bucket_name }}
         with:
-          host: ${{ env.ec2_host }}
+          host: ${{ needs.terraform.outputs.ec2_host }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             sudo yum install -y awscli unzip
-            aws s3 cp s3://$bucket_name/wordpress.zip /tmp/wordpress.zip
+            aws s3 cp s3://${{ needs.terraform.outputs.bucket_name }}/wordpress.zip /tmp/wordpress.zip
             sudo unzip -o /tmp/wordpress.zip -d /var/www/html
             sudo systemctl restart httpd
-
       - name: Post-deploy info
-        run: 'echo "WordPress should now be accessible at: http://${alb_dns_name}"'
+        run: |
+          echo "WordPress should now be accessible at: http://${{ needs.terraform.outputs.alb_dns_name }}"
