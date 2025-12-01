@@ -49,7 +49,7 @@ jobs:
         id: tf
         working-directory: infra/envs/dev
         run: |
-          terraform output -json > tf_outputs.json
+          terraform output -json > tf_outputs.json 2>/dev/null
           cat tf_outputs.json
 
           BUCKET=$(jq -r '.s3_bucket_name.value' tf_outputs.json)
