@@ -14,7 +14,7 @@ on:
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     env:
@@ -31,23 +31,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-central-1
 
-        # -------------------------------
-      # 1. Check if artifact exists
-      # -------------------------------
-      - name: Check for Terraform outputs artifact
-        id: has_artifact
+      - name: Download Terraform outputs artifact
         uses: actions/download-artifact@v4
+        id: download
         continue-on-error: true
         with:
           name: tf-outputs
           path: ./tf-out
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.9.0
 
       
       # -------------------------------
       # 2. Use artifact if found
       # -------------------------------
       - name: Parse Terraform outputs from artifact
-        if: ${{ steps.has_artifact.outcome == 'success' }}
+        if: ${{ steps.download.outcome == 'success' }}
         run: |
           echo "Using Terraform outputs artifact"
           bucket_name=$(jq -r '.bucket_name.value' tf-out/tf_outputs.json)
@@ -64,7 +66,7 @@ jobs:
       # 3. Fallback when artifact missing
       # -------------------------------
       - name: Fallback to terraform output
-        if: ${{ steps.has_artifact.outcome != 'success' }}
+        if: ${{ steps.download.outcome != 'success' }}
         run: |
           echo "No tf-outputs artifact found — running terraform locally"
           cd infra/envs/dev
