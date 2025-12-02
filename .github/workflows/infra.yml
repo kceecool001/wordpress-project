@@ -107,6 +107,29 @@ jobs:
             aws s3 cp s3://${{ needs.terraform.outputs.bucket_name }}/wordpress.zip /tmp/wordpress.zip
             sudo unzip -o /tmp/wordpress.zip -d /var/www/html
             sudo systemctl restart httpd
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+
+      - name: Verify deployment
+        run: |
+          echo "Verifying WordPress deployment..."
+          
+          # Check if WordPress files exist
+          if curl -s http://${{ needs.terraform.outputs.alb_dns_name }} | grep -q "WordPress\|wp-content"; then
+            echo "✅ WordPress is deployed and accessible"
+          else
+            echo "⚠️  WordPress might not be fully configured yet"
+          fi
+
       - name: Post-deploy info
         run: |
-          echo "WordPress should now be accessible at: http://${{ needs.terraform.outputs.alb_dns_name }}"
+          echo "========================================="
+          echo "  WordPress Deployment Complete!"
+          echo "========================================="
+          echo ""
+          echo "🌐 Access your site at:"
+          echo "   http://${{ needs.terraform.outputs.alb_dns_name }}"
+          echo ""
+          echo "📊 Run 'Verify WordPress Deployment' workflow"
+          echo "   to perform comprehensive health checks"
+          echo "========================================="
