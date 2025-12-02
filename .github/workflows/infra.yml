@@ -103,7 +103,10 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            sudo yum install -y awscli unzip
+            sudo yum install -y awscli unzip httpd
+            sudo mkdir -p /var/www/html
+            sudo systemctl enable httpd
+            sudo systemctl start httpd
             aws s3 cp s3://${{ needs.terraform.outputs.bucket_name }}/wordpress.zip /tmp/wordpress.zip
             sudo unzip -o /tmp/wordpress.zip -d /var/www/html
             sudo systemctl restart httpd
