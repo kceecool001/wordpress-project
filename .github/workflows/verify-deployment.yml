@@ -77,29 +77,69 @@ jobs:
             exit 1
           fi
 
-      - name: 3. Verify EC2 Web Server
-        run: |
-          echo "=== Verifying EC2 Web Server ==="
-          MAX_ATTEMPTS=10
-          ATTEMPT=0
-          
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            ATTEMPT=$((ATTEMPT+1))
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
-            
-            if curl -f -s -o /dev/null -w "%{http_code}" http://${{ steps.tf_outputs.outputs.ec2_host }} | grep -q "200\|301\|302"; then
-              echo "✅ EC2 web server is responding"
-              curl -I http://${{ steps.tf_outputs.outputs.ec2_host }}
-              break
+      - name: 3. Verify EC2 Web Server via SSH
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ steps.tf_outputs.outputs.ec2_host }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "=== Checking Apache Status ==="
+            if sudo systemctl is-active httpd > /dev/null 2>&1; then
+              echo "✅ Apache is running"
+              sudo systemctl status httpd --no-pager | head -10
             else
-              if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-                echo "❌ EC2 web server is NOT responding after $MAX_ATTEMPTS attempts"
-                exit 1
-              fi
-              echo "Waiting 10 seconds before retry..."
-              sleep 10
+              echo "❌ Apache is NOT running"
+              exit 1
             fi
-          done
+            
+            echo ""
+            echo "=== Checking Port 80 Locally ==="
+            if sudo netstat -tulpn | grep -q :80; then
+              echo "✅ Apache is listening on port 80"
+              sudo netstat -tulpn | grep :80
+            else
+              echo "❌ Nothing listening on port 80"
+              exit 1
+            fi
+
+            echo ""
+            echo "=== Checking Port 80 Locally ==="
+            if sudo netstat -tulpn | grep -q :80; then
+              echo "✅ Apache is listening on port 80"
+              sudo netstat -tulpn | grep :80
+            else
+              echo "❌ Nothing listening on port 80"
+              exit 1
+            fi
+            
+            echo ""
+            echo "=== Testing Local HTTP Response ==="
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
+            if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 301 ] || [ "$HTTP_CODE" -eq 302 ]; then
+              echo "✅ Apache responding locally (HTTP $HTTP_CODE)"
+            else
+              echo "❌ Apache not responding properly (HTTP $HTTP_CODE)"
+              exit 1
+            fi
+            
+            echo ""
+            echo "=== Checking WordPress Files ==="
+            if [ -d "/var/www/html" ]; then
+              echo "✅ /var/www/html exists"
+              FILE_COUNT=$(sudo ls -1 /var/www/html | wc -l)
+              echo "Files/directories in /var/www/html: $FILE_COUNT"
+              if [ $FILE_COUNT -gt 0 ]; then
+                echo "✅ WordPress files present"
+                sudo ls -la /var/www/html | head -10
+              else
+                echo "⚠️  Directory exists but appears empty"
+              fi
+            else
+              echo "❌ /var/www/html does not exist"
+              exit 1
+            fi
+
 
       - name: 4. Verify RDS Database Connectivity
         run: |
@@ -216,7 +256,78 @@ jobs:
             fi
           done
 
-      - name: 7. Test End-to-End Connectivity
+      - name: 7. Test WordPress Specifics
+        run: |
+          echo "=== Testing WordPress Application ==="
+          
+          # Check for WordPress indicators
+          RESPONSE=$(curl -s -L http://${{ steps.tf_outputs.outputs.alb_dns_name }})
+          
+          echo "Checking for WordPress indicators..."
+          
+          if echo "$RESPONSE" | grep -qi "wordpress\|wp-content\|wp-includes"; then
+            echo "✅ WordPress indicators found in response"
+          else
+            echo "⚠️  WordPress indicators not found (might not be configured yet)"
+          fi
+          
+          # Test wp-content directory
+          echo ""
+          echo "Testing wp-content directory..."
+          WP_CONTENT_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ steps.tf_outputs.outputs.alb_dns_name }}/wp-content/ 2>/dev/null)
+          if [ "$WP_CONTENT_CODE" -eq 403 ] || [ "$WP_CONTENT_CODE" -eq 200 ]; then
+            echo "✅ wp-content directory accessible (HTTP $WP_CONTENT_CODE)"
+          else
+            echo "⚠️  wp-content directory returned HTTP $WP_CONTENT_CODE"
+          fi
+          
+          # Test wp-admin
+          echo ""
+          echo "Testing wp-admin..."
+          WP_ADMIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L http://${{ steps.tf_outputs.outputs.alb_dns_name }}/wp-admin/ 2>/dev/null)
+          if [ "$WP_ADMIN_CODE" -eq 200 ] || [ "$WP_ADMIN_CODE" -eq 302 ]; then
+            echo "✅ wp-admin accessible (HTTP $WP_ADMIN_CODE)"
+          else
+            echo "⚠️  wp-admin returned HTTP $WP_ADMIN_CODE"
+          fi    
+
+      - name: 8. Performance Test
+        run: |
+          echo "=== Performance Testing ==="
+          
+          echo "Testing response times (10 requests)..."
+          TOTAL=0
+          SUCCESS_COUNT=0
+          
+          for i in {1..10}; do
+            TIME=$(curl -o /dev/null -s -w "%{time_total}" http://${{ steps.tf_outputs.outputs.alb_dns_name }} 2>/dev/null || echo "0")
+            if [ "$TIME" != "0" ]; then
+              echo "Request $i: ${TIME}s"
+              TOTAL=$(echo "$TOTAL + $TIME" | bc)
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+              echo "Request $i: Failed"
+            fi
+            sleep 1
+          done
+          
+          if [ $SUCCESS_COUNT -gt 0 ]; then
+            AVG=$(echo "scale=3; $TOTAL / $SUCCESS_COUNT" | bc)
+            echo ""
+            echo "Average response time: ${AVG}s"
+            
+            # Check if average is reasonable
+            if (( $(echo "$AVG < 3" | bc -l) )); then
+              echo "✅ Performance is good"
+            else
+              echo "⚠️  Performance could be better (average > 3s)"
+            fi
+          else
+            echo "❌ All requests failed"
+            exit 1
+          fi
+
+      - name: 9. Test End-to-End Connectivity
         run: |
           echo "=== Testing End-to-End Connectivity ==="
           
