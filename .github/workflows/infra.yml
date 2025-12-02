@@ -107,12 +107,21 @@ jobs:
             sudo mkdir -p /var/www/html
             sudo systemctl enable httpd
             sudo systemctl start httpd
+
             aws s3 cp s3://${{ needs.terraform.outputs.bucket_name }}/wordpress.zip /tmp/wordpress.zip
             sudo unzip -o /tmp/wordpress.zip -d /var/www/html
+
             if [ -d "/var/www/html/wordpress" ]; then
               echo "Flattening wordpress/ directory..."
               sudo rsync -av /var/www/html/wordpress/ /var/www/html/
               sudo rm -rf /var/www/html/wordpress
+            fi
+
+            # Ensure WordPress index.php exists at root
+            if [ ! -f "/var/www/html/index.php" ]; then
+              echo "❌ WordPress index.php not found at /var/www/html"
+              sudo ls -la /var/www/html
+              exit 1
             fi
 
             # Fix ownership and permissions

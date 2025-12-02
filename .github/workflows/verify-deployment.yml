@@ -102,44 +102,36 @@ jobs:
               echo "❌ Nothing listening on port 80"
               exit 1
             fi
-
-            echo ""
-            echo "=== Checking Port 80 Locally ==="
-            if sudo netstat -tulpn | grep -q :80; then
-              echo "✅ Apache is listening on port 80"
-              sudo netstat -tulpn | grep :80
-            else
-              echo "❌ Nothing listening on port 80"
-              exit 1
-            fi
             
             echo ""
             echo "=== Testing Local HTTP Response ==="
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
-            if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 301 ] || [ "$HTTP_CODE" -eq 302 ]; then
-              echo "✅ Apache responding locally (HTTP $HTTP_CODE)"
+            RESPONSE=$(curl -s -L http://localhost)
+            HTTP_CODE=$(echo "$RESPONSE" | grep -oE "^[0-9]{3}" || curl -s -o /dev/null -w "%{http_code}" http://localhost)
+
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
+               echo "✅ Apache responding locally (HTTP $HTTP_CODE)"
             else
-              echo "❌ Apache not responding properly (HTTP $HTTP_CODE)"
-              exit 1
+               echo "❌ Apache not responding properly (HTTP $HTTP_CODE)"
+               exit 1
+            fi
+
+            echo ""
+            echo "=== Checking WordPress Indicators ==="
+            if echo "$RESPONSE" | grep -qi "wp-content\|wp-includes\|WordPress"; then
+               echo "✅ WordPress markers found in response"
+            else
+               echo "⚠️ No WordPress markers found — site may not be configured yet"
             fi
             
             echo ""
-            echo "=== Checking WordPress Files ==="
-            if [ -d "/var/www/html" ]; then
-              echo "✅ /var/www/html exists"
-              FILE_COUNT=$(sudo ls -1 /var/www/html | wc -l)
-              echo "Files/directories in /var/www/html: $FILE_COUNT"
-              if [ $FILE_COUNT -gt 0 ]; then
-                echo "✅ WordPress files present"
-                sudo ls -la /var/www/html | head -10
-              else
-                echo "⚠️  Directory exists but appears empty"
-              fi
+            echo "=== Checking WordPress Files on Disk ==="
+            if [ -f "/var/www/html/index.php" ]; then
+               echo "✅ index.php exists at /var/www/html"
             else
-              echo "❌ /var/www/html does not exist"
-              exit 1
+               echo "❌ index.php missing at /var/www/html"
+               sudo ls -la /var/www/html
+               exit 1
             fi
-
 
       - name: 4. Verify RDS Database Connectivity
         run: |
