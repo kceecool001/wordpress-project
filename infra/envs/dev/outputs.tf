@@ -51,6 +51,9 @@ output "alb_arn" {
   description = "ARN of the ALB"
   value       = module.alb.alb_arn
 }
+output "target_group_arn" {
+  value = module.alb.target_group_arn
+}
 
 # S3 outputs (application bucket, not tfstate)
 output "s3_bucket_name" {
@@ -68,6 +71,6 @@ output "ec2_instance_profile" {
 }
 
 #output "codedeploy_role_arn" {
- # description = "IAM role ARN for CodeDeploy"
- ## value       = module.iam.codedeploy_role_arn
+# description = "IAM role ARN for CodeDeploy"
+## value       = module.iam.codedeploy_role_arn
 #}

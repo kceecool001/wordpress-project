@@ -66,6 +66,12 @@ module "iam" {
   env     = var.env
 }
 
+resource "aws_lb_target_group_attachment" "ec2_attach" {
+  target_group_arn = module.alb.target_group_arn
+  target_id        = module.ec2.ec2_id
+  port             = 80
+}
+
 #module "codedeploy" {
 #  source              = "../../modules/codedeploy"
 #  project             = var.project_name
