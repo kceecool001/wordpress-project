@@ -109,7 +109,21 @@ jobs:
             sudo systemctl start httpd
             aws s3 cp s3://${{ needs.terraform.outputs.bucket_name }}/wordpress.zip /tmp/wordpress.zip
             sudo unzip -o /tmp/wordpress.zip -d /var/www/html
+            if [ -d "/var/www/html/wordpress" ]; then
+              echo "Flattening wordpress/ directory..."
+              sudo rsync -av /var/www/html/wordpress/ /var/www/html/
+              sudo rm -rf /var/www/html/wordpress
+            fi
+
+            # Fix ownership and permissions
+            sudo chown -R apache:apache /var/www/html
+            sudo chmod -R 755 /var/www/html
+
+            # Restart Apache
             sudo systemctl restart httpd
+
+            echo "✅ WordPress deployed to /var/www/html"
+
       - name: Wait for deployment to stabilize
         run: sleep 30
 
