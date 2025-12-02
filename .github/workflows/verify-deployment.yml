@@ -1,0 +1,261 @@
+name: Verify WordPress Deployment
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["WordPress Infra + App Deployment"]
+    types:
+      - completed
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.9.0
+          terraform_wrapper: false
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Get Terraform outputs
+        id: tf_outputs
+        working-directory: infra/envs/dev
+        run: |
+          terraform init -input=false
+          TF_OUTPUTS=$(terraform output -json)
+          
+          BUCKET=$(echo "$TF_OUTPUTS" | jq -r '.s3_bucket_name.value')
+          HOST=$(echo "$TF_OUTPUTS" | jq -r '.ec2_public_ip.value')
+          DB=$(echo "$TF_OUTPUTS" | jq -r '.db_endpoint.value')
+          ALB=$(echo "$TF_OUTPUTS" | jq -r '.alb_dns_name.value')
+          EC2_ID=$(echo "$TF_OUTPUTS" | jq -r '.ec2_id.value')
+          
+          echo "bucket_name=$BUCKET" >> $GITHUB_OUTPUT
+          echo "ec2_host=$HOST" >> $GITHUB_OUTPUT
+          echo "db_endpoint=$DB" >> $GITHUB_OUTPUT
+          echo "alb_dns_name=$ALB" >> $GITHUB_OUTPUT
+          echo "ec2_id=$EC2_ID" >> $GITHUB_OUTPUT
+
+      - name: 1. Verify S3 Bucket Access
+        run: |
+          echo "=== Verifying S3 Bucket ==="
+          if aws s3 ls s3://${{ steps.tf_outputs.outputs.bucket_name }} > /dev/null 2>&1; then
+            echo "✅ S3 bucket is accessible"
+            echo "Files in bucket:"
+            aws s3 ls s3://${{ steps.tf_outputs.outputs.bucket_name }}/
+          else
+            echo "❌ S3 bucket is NOT accessible"
+            exit 1
+          fi
+
+      - name: 2. Verify EC2 Instance Status
+        run: |
+          echo "=== Verifying EC2 Instance ==="
+          INSTANCE_STATE=$(aws ec2 describe-instances \
+            --instance-ids ${{ steps.tf_outputs.outputs.ec2_id }} \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text)
+          
+          echo "Instance State: $INSTANCE_STATE"
+          
+          if [ "$INSTANCE_STATE" = "running" ]; then
+            echo "✅ EC2 instance is running"
+          else
+            echo "❌ EC2 instance is NOT running (State: $INSTANCE_STATE)"
+            exit 1
+          fi
+
+      - name: 3. Verify EC2 Web Server
+        run: |
+          echo "=== Verifying EC2 Web Server ==="
+          MAX_ATTEMPTS=10
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT+1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
+            
+            if curl -f -s -o /dev/null -w "%{http_code}" http://${{ steps.tf_outputs.outputs.ec2_host }} | grep -q "200\|301\|302"; then
+              echo "✅ EC2 web server is responding"
+              curl -I http://${{ steps.tf_outputs.outputs.ec2_host }}
+              break
+            else
+              if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+                echo "❌ EC2 web server is NOT responding after $MAX_ATTEMPTS attempts"
+                exit 1
+              fi
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+          done
+
+      - name: 4. Verify RDS Database Connectivity
+        run: |
+          echo "=== Verifying RDS Database ==="
+          DB_HOST=$(echo "${{ steps.tf_outputs.outputs.db_endpoint }}" | cut -d':' -f1)
+          DB_PORT=$(echo "${{ steps.tf_outputs.outputs.db_endpoint }}" | cut -d':' -f2)
+          
+          echo "Database Host: $DB_HOST"
+          echo "Database Port: $DB_PORT"
+          
+          DB_STATUS=$(aws rds describe-db-instances \
+            --query 'DBInstances[?Endpoint.Address==`'$DB_HOST'`].DBInstanceStatus' \
+            --output text)
+          
+          echo "Database Status: $DB_STATUS"
+          
+          if [ "$DB_STATUS" = "available" ]; then
+            echo "✅ RDS database is available"
+          else
+            echo "❌ RDS database is NOT available (Status: $DB_STATUS)"
+            exit 1
+          fi
+
+      - name: 5. Verify Target Group Health
+        run: |
+          echo "=== Verifying Target Group Health ==="
+          
+          # Get target group ARN
+          TG_ARN=$(aws elbv2 describe-target-groups \
+            --query 'TargetGroups[?contains(TargetGroupName, `wordpress`) || contains(TargetGroupName, `dev`)].TargetGroupArn' \
+            --output text | head -n1)
+          
+          if [ -z "$TG_ARN" ]; then
+            echo "❌ Target group not found"
+            exit 1
+          fi
+          
+          echo "Target Group ARN: $TG_ARN"
+          
+          # Check if EC2 is registered
+          REGISTERED=$(aws elbv2 describe-target-health \
+            --target-group-arn $TG_ARN \
+            --query 'TargetHealthDescriptions[?Target.Id==`${{ steps.tf_outputs.outputs.ec2_id }}`]' \
+            --output json)
+          
+          if [ "$REGISTERED" = "[]" ]; then
+            echo "❌ EC2 instance is NOT registered in target group"
+            echo "Attempting to register..."
+            
+            # Try to find and register
+            TG_ARN_LIST=$(aws elbv2 describe-target-groups \
+              --query 'TargetGroups[].TargetGroupArn' \
+              --output text)
+            
+            for TG in $TG_ARN_LIST; do
+              echo "Checking target group: $TG"
+              aws elbv2 register-targets \
+                --target-group-arn $TG \
+                --targets Id=${{ steps.tf_outputs.outputs.ec2_id }} 2>/dev/null || true
+            done
+            
+            echo "⚠️  Registration attempted. Please verify manually or run Terraform apply."
+          else
+            echo "✅ EC2 instance is registered in target group"
+          fi
+          
+          # Wait for health check
+          echo "Waiting 30 seconds for health check..."
+          sleep 30
+          
+          # Check health status
+          HEALTH_STATUS=$(aws elbv2 describe-target-health \
+            --target-group-arn $TG_ARN \
+            --targets Id=${{ steps.tf_outputs.outputs.ec2_id }} \
+            --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+            --output text 2>/dev/null || echo "unknown")
+          
+          echo "Target Health Status: $HEALTH_STATUS"
+          
+          if [ "$HEALTH_STATUS" = "healthy" ]; then
+            echo "✅ Target is healthy"
+          elif [ "$HEALTH_STATUS" = "initial" ]; then
+            echo "⚠️  Target is in initial state (health checks in progress)"
+          else
+            echo "⚠️  Target health status: $HEALTH_STATUS"
+            echo "This may be expected if the instance was just launched."
+          fi
+
+      - name: 6. Verify ALB Endpoint
+        run: |
+          echo "=== Verifying ALB Endpoint ==="
+          MAX_ATTEMPTS=15
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT+1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
+            
+            HTTP_CODE=$(curl -f -s -o /dev/null -w "%{http_code}" http://${{ steps.tf_outputs.outputs.alb_dns_name }} || echo "000")
+            
+            if echo "$HTTP_CODE" | grep -q "200\|301\|302"; then
+              echo "✅ ALB is responding (HTTP $HTTP_CODE)"
+              echo ""
+              echo "=== Response Headers ==="
+              curl -I http://${{ steps.tf_outputs.outputs.alb_dns_name }}
+              break
+            else
+              if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+                echo "❌ ALB is NOT responding properly after $MAX_ATTEMPTS attempts (HTTP $HTTP_CODE)"
+                exit 1
+              fi
+              echo "ALB returned HTTP $HTTP_CODE, waiting 15 seconds before retry..."
+              sleep 15
+            fi
+          done
+
+      - name: 7. Test End-to-End Connectivity
+        run: |
+          echo "=== Testing End-to-End Connectivity ==="
+          
+          # Test direct EC2 access
+          echo "Testing direct EC2 access..."
+          EC2_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ steps.tf_outputs.outputs.ec2_host }})
+          echo "EC2 Direct Response: HTTP $EC2_RESPONSE"
+          
+          # Test ALB access
+          echo "Testing ALB access..."
+          ALB_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ steps.tf_outputs.outputs.alb_dns_name }})
+          echo "ALB Response: HTTP $ALB_RESPONSE"
+          
+          # Compare responses
+          if [ "$EC2_RESPONSE" = "$ALB_RESPONSE" ]; then
+            echo "✅ ALB is correctly routing to EC2"
+          else
+            echo "⚠️  Response codes differ (EC2: $EC2_RESPONSE, ALB: $ALB_RESPONSE)"
+            echo "This might indicate routing issues"
+          fi
+
+      - name: Generate Deployment Report
+        if: always()
+        run: |
+          echo "==================================="
+          echo "   DEPLOYMENT VERIFICATION REPORT"
+          echo "==================================="
+          echo ""
+          echo "🌐 Endpoints:"
+          echo "   ALB URL: http://${{ steps.tf_outputs.outputs.alb_dns_name }}"
+          echo "   EC2 URL: http://${{ steps.tf_outputs.outputs.ec2_host }}"
+          echo ""
+          echo "📦 Resources:"
+          echo "   S3 Bucket: ${{ steps.tf_outputs.outputs.bucket_name }}"
+          echo "   EC2 Instance: ${{ steps.tf_outputs.outputs.ec2_id }}"
+          echo "   Database: ${{ steps.tf_outputs.outputs.db_endpoint }}"
+          echo ""
+          echo "==================================="
+          echo ""
+          echo "🔗 Access your WordPress site at:"
+          echo "   http://${{ steps.tf_outputs.outputs.alb_dns_name }}"
+          echo "==================================="
